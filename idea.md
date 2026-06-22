@@ -908,3 +908,11 @@ Changes or deviations from the plan discovered during actual implementation.
 - **`expo-sqlite` async API:** `expo-sqlite` v14+ (Expo SDK 56) uses a fully async API — `openDatabaseAsync`, `execAsync`, `getAllAsync`, `getFirstAsync`, `runAsync`, `prepareAsync`. The old synchronous `openDatabase` / `transaction` API is gone. All DB calls must be `await`ed.
 
 - **`contentStyle` not valid on Tabs:** `Tabs` (bottom tab navigator) `screenOptions` does not accept `contentStyle`. Screen background color must be set directly in each screen's root `View` style, not in the navigator options.
+
+### Phase 2
+
+- **`ParsedIntent` has `categoryId` field not in the spec:** The spec defined `ParsedIntent` with `action`, `amount`, `category`, `date`, `period`. The actual implementation adds `categoryId: number | null` — the resolved DB row id. This avoids a second `getCategoryByName` lookup in Phase 4's `useVoiceCommand`. When wiring the orchestrator, read `intent.categoryId` directly; do not do a separate category lookup.
+
+- **`periodToRange` lives in `dateResolver.ts`, not `queries.ts`:** The spec planned `resolvePeriod()` in `src/db/queries.ts`. It was implemented as `periodToRange()` in `src/parser/dateResolver.ts` to keep it testable without SQLite. `queries.ts` can re-export or delegate to it — do not duplicate the logic.
+
+- **Stop-word guards are required in both ADD and QUERY loops:** Greedy regex capture groups bleed into adjacent words (e.g. capturing `"on"` or `"month"` as a category name). Both loops carry an explicit stop-word list that rejects such captures before calling `matchCategory`. If new patterns are added, verify their capture groups don't grab stop-words before the guards.
