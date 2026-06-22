@@ -786,6 +786,76 @@ daily personal use. All edge cases handled gracefully. No crashes in normal usag
 
 ---
 
+## v1.1 — Planned Improvements (After v1.0 is stable)
+
+These are confirmed design decisions deferred to v1.1. They fit the existing architecture — no new dependencies, no major rewrites. Do not implement any of these during v1.0 phases.
+
+### 1. `{Parent} General` catch-all subcategory per parent
+
+Each parent gets a seeded `General` child (e.g. `Food → Food General`, `Bills → Bills General`). When a user says "spent 300 for food" and "food" fuzzy-matches a parent name rather than any child, the expense is routed to that parent's `General` subcategory automatically. TTS confirms: "Added 300 rupees to Food General."
+
+Naming rule: child is named `{Parent} General` (not "Other") to avoid fuzzy-match collisions with the top-level `Other` parent. The top-level `Other` parent remains for truly uncategorized expenses that the user explicitly routes there.
+
+**Unknown subcategory behaviour (unchanged from v1.0):** If a user says "spent 20 for pen" and "pen" matches nothing — not a parent, not a child — the app still stops and asks: "I don't have a category called pen. Say 'create category pen under personal' to add it." No silent fallback to Other. User must explicitly create it first. This keeps data clean.
+
+**Spending on parent explicitly ("spent 300 for personal use"):** In v1.0 this returns UNKNOWN with TTS: "Personal is a group, not a category. Try: spent 300 for shopping." In v1.1 this routes to `Personal General` instead.
+
+**Seed additions for v1.1:**
+```
+Personal  → ... + Personal General
+Household → ... + Household General
+Transport → ... + Transport General
+Food      → ... + Food General
+Bills     → ... + Bills General
+Other     → (unchanged — already the catch-all parent)
+```
+
+### 2. Parent-level aggregate queries
+
+"Total spending on bills this month" → SUM all expenses where `category.parent = 'Bills'`.
+
+`categoryMatcher.ts` must return a `{ type: 'parent' | 'child', ... }` flag so the orchestrator knows which DB function to call. Two DB functions:
+- `getTotalByCategory(categoryId, startDate, endDate)` — existing, unchanged
+- `getTotalByParent(parentName, startDate, endDate)` — new, JOIN-based SUM across all children
+
+TTS response format is identical: "You spent 2400 rupees on Bills this month." The user cannot tell the difference between a child query and a parent aggregate — nor should they need to.
+
+**Query on `this_week` for a parent also works** — same mechanism, just a different date range passed in.
+
+### 3. Optional description/note on ADD intents
+
+The `note` column already exists in the `expenses` table. In v1.1, the parser captures free-text after the matched core intent as the note.
+
+```
+"spent 500 on gym monthly membership fees"
+ └─ core: "spent 500 on gym"   note: "monthly membership fees"
+
+"grocery 800 paid big monthly shopping"
+ └─ core: "grocery 800 paid"   note: "big monthly shopping"
+```
+
+Implementation: each ADD regex gets an optional trailing capture group `(.+)?`. Date extraction runs first (already does), so date phrases are stripped before the note is captured — no bleed. Note is stored as-is (no parsing). It is displayed on ExpenseCard and included in CSV export.
+
+Note is always optional — `null` if nothing follows the core intent. No TTS prompting for it.
+
+### 4. Extended query periods
+
+Add three new period types to `resolvePeriod()` in `queries.ts`:
+
+| Period type | Voice examples | Resolves to |
+|---|---|---|
+| `last_N_days` | "last 7 days", "past 3 days", "last ten days" | `today − N → today` (rolling window, not calendar-anchored) |
+| `month_name` | "in August", "spending in May", "august spending" | `YYYY-MM-01 → YYYY-MM-last` — if month is in the future, assume previous year |
+| `year` | "in 2025", "last year", "this year" | `YYYY-01-01 → YYYY-12-31` |
+
+`last_N_days` supports both digit and word numbers ("last seven days") — same word-number map already used in `dateResolver.ts`.
+
+`ParsedIntent.period` type expands from `'this_month' | 'last_month' | 'this_week'` to also include `'last_N_days'` (with a companion `periodN: number` field) and `'month_name'` / `'year'` (with a companion `periodLabel: string` field for TTS).
+
+Explicit date range queries ("from June 1 to June 15") are deferred to v2.0 — complex two-anchor regex for marginal real-world gain.
+
+---
+
 ## v2.0 — "Smarter" (Future, Not Phased)
 
 **Target devices:** Pixel 8+ / Samsung S24+ (Gemini Nano support required)
@@ -832,3 +902,9 @@ Changes or deviations from the plan discovered during actual implementation.
 - **MIUI install blocker:** On Poco M2 Pro, MIUI shows a "Send app for security check?" prompt that blocks installation. Fix: Developer Options → disable "Install via USB", or use `adb install -r` directly.
 
 - **Starting Metro:** Use `npx expo start --dev-client` (not plain `npx expo start`). Plain start defaults to Expo Go mode and tries to download the Expo Go app instead of connecting to the installed custom APK.
+
+### Phase 1
+
+- **`expo-sqlite` async API:** `expo-sqlite` v14+ (Expo SDK 56) uses a fully async API — `openDatabaseAsync`, `execAsync`, `getAllAsync`, `getFirstAsync`, `runAsync`, `prepareAsync`. The old synchronous `openDatabase` / `transaction` API is gone. All DB calls must be `await`ed.
+
+- **`contentStyle` not valid on Tabs:** `Tabs` (bottom tab navigator) `screenOptions` does not accept `contentStyle`. Screen background color must be set directly in each screen's root `View` style, not in the navigator options.

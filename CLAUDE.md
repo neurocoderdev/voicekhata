@@ -141,6 +141,12 @@ Tests are pure — no SQLite, no Vosk, no device. If a test requires a device or
 
 ---
 
+## Before Starting Any Phase — Check Implementation Notes
+
+`idea.md` has an **"Implementation Notes / Planning Changes"** section at the bottom. It records deviations discovered during actual implementation — wrong package versions, API changes, Gradle quirks, etc. **Read this section before starting each phase.** It is the source of truth when the plan and reality diverge.
+
+---
+
 ## After Every Implementation — Manual Testing Steps
 
 **Claude must always end each implementation session with a clearly formatted "Manual Testing" section** listing the exact steps to:
