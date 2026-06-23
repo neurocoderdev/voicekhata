@@ -916,3 +916,25 @@ Changes or deviations from the plan discovered during actual implementation.
 - **`periodToRange` lives in `dateResolver.ts`, not `queries.ts`:** The spec planned `resolvePeriod()` in `src/db/queries.ts`. It was implemented as `periodToRange()` in `src/parser/dateResolver.ts` to keep it testable without SQLite. `queries.ts` can re-export or delegate to it — do not duplicate the logic.
 
 - **Stop-word guards are required in both ADD and QUERY loops:** Greedy regex capture groups bleed into adjacent words (e.g. capturing `"on"` or `"month"` as a category name). Both loops carry an explicit stop-word list that rejects such captures before calling `matchCategory`. If new patterns are added, verify their capture groups don't grab stop-words before the guards.
+
+### Phase 3
+
+**STT — Vosk event model (the key gotcha; whole hook depends on it):**
+- `react-native-vosk@2.1.7` exposes **module-level functions**, not a class: `Vosk.loadModel/start/stop/unload` + `Vosk.onPartialResult/onResult/onFinalResult/onError/onTimeout` (each returns a subscription with `.remove()`).
+- Event semantics: `onResult` fires on **every mid-command silence pause** and the recognizer **keeps running** — so it must **accumulate segments, never end the session**. `onFinalResult` (after `stop()`) is the real end. Only `stop()`/`unload()`/`onTimeout` release the native `SpeechService`. → Design is **push-to-talk**: tap start, tap stop; `useSpeechRecognition.ts` accumulates into `accumRef`, finalizes on `onFinalResult`/`onTimeout`/watchdog.
+- Native `stop()` is async on the audio thread. **Always call `Vosk.stop()` to release**, then settle `STOP_SETTLE_MS=250ms` before the next `start()`; otherwise `start()` rejects `"Recognizer is already in use"` and the mic stays hot. After `stop()`, poll `finalizedRef` up to `FINAL_GRACE_MS=600ms` for the native final before committing locally (a fixed wait drops the last segment under GC). A 15s watchdog + native `timeout` guarantee the mic is always released.
+- `loadModel()` calls `Vosk.unload()` (not just `stop()`) + settle first — the native module is a **singleton that survives Metro Fast Refresh** with a live service/model; reloading the model under a live service crashes.
+- `useSpeechRecognition` exposes a monotonic **`resultId`** that bumps per committed result; consumers must react to `resultId`, not the `finalResult` string, or a repeated phrase ("auto 50" twice) is treated as one.
+
+**STT — accuracy / grammar (important for later phases):**
+- `Vosk.start({ grammar: VOSK_GRAMMAR })` puts Vosk in **grammar-constrained mode** — it can only output words on the list (+`[unk]`). Deliberate trade-off: excellent on expense commands, poor on general dictation. **`VOSK_GRAMMAR` (`src/utils/constants.ts`) must stay a superset of every word the parser understands** (verbs, categories+synonyms, number words 0–thousand incl. teens, weekdays, month names, lakh/crore). Always keep `"[unk]"` in it. If free-text notes are ever needed, use a separate grammar-less `start()` for that field only.
+- Changing `VOSK_GRAMMAR` is pure JS — Metro reload, no rebuild.
+
+**TTS (`useTts.ts`):** Warm the engine on mount (`getAvailableVoicesAsync()` + a `volume:0` primer) — first `Speech.speak` otherwise cold-starts ~1–2s. Skip the `Speech.stop()` round-trip when nothing is playing (saves ~300ms). `Speech.stop()` is async — await before a new utterance. `language:'en-IN'` may silently fall back to the default voice on some MIUI ROMs.
+
+**Build / assets:**
+- Model lives at `assets/model-en-in/` (folder name only to `loadModel`, no path prefix). `app.json` plugin needs `"models": ["assets/model-en-in"]`; Gradle copies it via `Vosk_models`. Adding/changing the model requires a clean prebuild + run.
+- `INVALID_PLUGIN_IMPORT` IDE warning on `app.json` (Vosk plugin) is a false positive — ignore.
+
+**Memory:** ~491 MB PSS in Phase 3 (model ~150 MB + Hermes/RN/Reanimated). Expected; measure peak during active recognition (`adb shell dumpsys meminfo`) in Phase 6, not idle.
+
