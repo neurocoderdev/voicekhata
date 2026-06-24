@@ -7,16 +7,18 @@ import { useAppStore } from '../src/store/useAppStore';
 
 export default function RootLayout() {
   const setDbReady = useAppStore((s) => s.setDbReady);
-  const refreshCategories = useAppStore((s) => s.refreshCategories);
-  const refreshExpenses = useAppStore((s) => s.refreshExpenses);
+  const refreshAll = useAppStore((s) => s.refreshAll);
+  const loadSettings = useAppStore((s) => s.loadSettings);
 
   useEffect(() => {
     (async () => {
       await initDatabase();
       setDbReady(true);
-      await refreshCategories();
-      await refreshExpenses();
+      // Categories must load before any voice command — the parser's fuzzy
+      // matcher reads them from the store.
+      await Promise.all([refreshAll(), loadSettings()]);
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

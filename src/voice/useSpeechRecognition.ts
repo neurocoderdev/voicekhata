@@ -11,6 +11,9 @@ export type SpeechRecognitionState = {
   // result even when the recognized text is identical to the previous one
   // (e.g. saying "auto 50" twice). Compare this, not the finalResult string.
   resultId: number;
+  // Bumps once each time a session ends with NO speech recognized. Lets the UI
+  // respond ("I didn't catch that") to a silent stop, which resultId never signals.
+  emptyResultId: number;
   error: string | null;
   loadModel: () => Promise<void>;
   startListening: () => Promise<void>;
@@ -20,10 +23,31 @@ export type SpeechRecognitionState = {
 
 const MODEL_PATH = 'model-en-in';
 
+// ── Recognition mode ────────────────────────────────────────────────────────
+// Vosk can run in two modes:
+//   • Grammar-constrained (start({grammar})): only outputs words on VOSK_GRAMMAR
+//     (+"[unk]"). Rock-solid on the exact phrases listed, but ANY word not in the
+//     list — including natural connective speech and many query phrasings — comes
+//     back as "[unk]", and continuous speech degrades badly. This was the cause
+//     of the "can't recognize continuous words / everything is [unk]" problem.
+//   • Free dictation (start() with no grammar): uses the model's full ~vocabulary.
+//     Far better on continuous, natural speech. Misrecognitions are absorbed
+//     downstream by the parser's fuzzy category matcher + number-word normalizer.
+//
+// We default to GRAMMAR-CONSTRAINED mode. The small Indian-English model is far
+// more accurate when the decoder is restricted to the words our app uses than in
+// free dictation (which skipped words and produced phonetic garbage like
+// "jim"). The grammar (VOSK_GRAMMAR) is kept VAST — every parser word + synonyms
+// + both digit and word numbers — so almost nothing legitimate becomes "[unk]".
+// Synonyms/misrecognitions that still slip through are mapped by the category
+// matcher's synonym layer. Flip to false to A/B test free dictation.
+const USE_GRAMMAR = true;
+
 // Hard ceiling on a single listening session. The native SpeechService has its
 // own VAD but in push-to-talk we drive stop() manually; this watchdog guarantees
-// the mic is always released even if the user never taps stop.
-const MAX_SESSION_MS = 15000;
+// the mic is always released even if the user never taps stop. Free dictation
+// benefits from a longer ceiling so a full natural sentence isn't cut off.
+const MAX_SESSION_MS = 20000;
 
 // How long to wait after Vosk.stop()/unload() before the native SpeechService is
 // guaranteed torn down (it does stop() + shutdown() on a background thread).
@@ -45,6 +69,8 @@ export function useSpeechRecognition(): SpeechRecognitionState {
   const [partialResult, setPartialResult] = useState('');
   const [finalResult, setFinalResult] = useState('');
   const [resultId, setResultId] = useState(0);
+  // Bumps when a listening session ends with no recognized speech at all.
+  const [emptyResultId, setEmptyResultId] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   // Refs mirror the latest values for use inside event callbacks (no stale closure).
@@ -153,6 +179,7 @@ export function useSpeechRecognition(): SpeechRecognitionState {
     if (!wasActive && !appended) return;
 
     const result = accumRef.current.trim();
+    const firstCommitThisSession = !finalizedRef.current;
 
     listeningRef.current = false;
     setIsListening(false);
@@ -163,6 +190,13 @@ export function useSpeechRecognition(): SpeechRecognitionState {
     // new result — even when the text is identical to the previous session's.
     if (result && (!finalizedRef.current || appended)) {
       setResultId((n) => n + 1);
+    }
+
+    // A session that ended with NO recognized speech (user tapped stop on silence,
+    // or VAD timed out empty) bumps a separate counter so the consumer can speak
+    // "I didn't catch that" — resultId alone would never fire for an empty result.
+    if (!result && firstCommitThisSession) {
+      setEmptyResultId((n) => n + 1);
     }
     finalizedRef.current = true;
 
@@ -245,8 +279,13 @@ export function useSpeechRecognition(): SpeechRecognitionState {
     subsRef.current = [partialSub, resultSub, finalSub, errorSub, timeoutSub];
 
     try {
-      // Pass a native timeout as a backstop in addition to our JS watchdog.
-      await Vosk.start({ grammar: VOSK_GRAMMAR, timeout: MAX_SESSION_MS });
+      // Free dictation by default (no grammar) for natural continuous speech;
+      // grammar-constrained only if USE_GRAMMAR is flipped on. A native timeout
+      // backs up our JS watchdog either way.
+      const startOptions = USE_GRAMMAR
+        ? { grammar: VOSK_GRAMMAR, timeout: MAX_SESSION_MS }
+        : { timeout: MAX_SESSION_MS };
+      await Vosk.start(startOptions);
       listeningRef.current = true;
       setIsListening(true);
 
@@ -333,6 +372,7 @@ export function useSpeechRecognition(): SpeechRecognitionState {
     partialResult,
     finalResult,
     resultId,
+    emptyResultId,
     error,
     loadModel,
     startListening,

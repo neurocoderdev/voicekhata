@@ -30,6 +30,15 @@ export type CategoryTotal = {
   total: number;
 };
 
+// Per-category expense count + total over a date range. Used by the Categories
+// screen so it can show stats for every category in a single query rather than
+// one query per category.
+export type CategoryStat = {
+  category_id: number;
+  count: number;
+  total: number;
+};
+
 export async function insertExpense(params: InsertExpenseParams): Promise<number> {
   const result = await getDb().runAsync(
     `INSERT INTO expenses (amount, category_id, expense_date, note, raw_voice)
@@ -92,6 +101,19 @@ export async function getGrandTotal(startDate: string, endDate: string): Promise
     [startDate, endDate]
   );
   return result?.total ?? 0;
+}
+
+export async function getCategoryStats(
+  startDate: string,
+  endDate: string
+): Promise<CategoryStat[]> {
+  return getDb().getAllAsync<CategoryStat>(
+    `SELECT category_id, COUNT(*) as count, SUM(amount) as total
+     FROM expenses
+     WHERE expense_date BETWEEN ? AND ?
+     GROUP BY category_id`,
+    [startDate, endDate]
+  );
 }
 
 export async function getMonthlySummary(

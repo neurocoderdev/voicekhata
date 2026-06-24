@@ -610,6 +610,17 @@ confirms. This is where all modules connect. The app becomes functionally comple
 - Set up `expo-router` tab navigator in `app/_layout.tsx`:
   - Three tabs: Home (mic icon), History (list icon), Categories (tag icon)
   - Bottom tab bar with icons and labels
+- **Confirm-before-submit toggle + manual typing (added during Phase 4 hardening):**
+  - A toggle on the Home screen, persisted in the `settings` table (`confirm_before_submit`).
+  - Toggle OFF (default): a recognized command runs immediately, as before.
+  - Toggle ON: after each voice command, an editable popup (TextInput pre-filled
+    with the transcript) appears with **Submit** and **Cancel** buttons. The
+    command only runs after Submit. Cancel discards it.
+  - A **"Type a command instead"** button below the mic opens the same popup with
+    an empty field, so a command can be typed manually with the keyboard — works
+    regardless of the toggle. This is also the fallback when STT mis-hears.
+  - Empty recognition (silent stop) never opens the popup — it goes straight to
+    the "I didn't catch that" TTS prompt.
 - End-to-end testing on Poco M2 Pro — verify:
   - "gym 500 rupees paid" → expense appears in list → TTS confirms with total
   - "spent 1000 on groceries yesterday" → expense_date is yesterday in DB
@@ -937,4 +948,28 @@ Changes or deviations from the plan discovered during actual implementation.
 - `INVALID_PLUGIN_IMPORT` IDE warning on `app.json` (Vosk plugin) is a false positive — ignore.
 
 **Memory:** ~491 MB PSS in Phase 3 (model ~150 MB + Hermes/RN/Reanimated). Expected; measure peak during active recognition (`adb shell dumpsys meminfo`) in Phase 6, not idle.
+
+### Phase 4
+
+- **Screens live in `app/`, not `src/app/`** (repo-root `expo-router` dir). Tab navigator was already built in Phase 1's `app/_layout.tsx`.
+
+- **Orchestrator `useVoiceCommand(tts)` takes the TTS hook as an argument** — one shared `expo-speech` engine. The "TTS finishes before mic starts" rule is enforced at the screen (mic disabled while `tts.isSpeaking`), not inside the orchestrator. It reads categories via `useAppStore.getState().categories` at call time (fresh list, render-timing-independent) and uses `intent.categoryId` directly; `categoryId == null` + non-null `category` is the unknown-category signal.
+
+- **Home dispatch fires on `stt.resultId` / `stt.emptyResultId`** (monotonic counters), never the result string — repeating a command must re-fire, and a silent stop must still signal (`emptyResultId` → "I didn't catch that" TTS).
+
+- **STT is grammar-constrained** (`USE_GRAMMAR=true`). Free dictation was tried and reverted — the small model dropped words and produced phonetic garbage. `VOSK_GRAMMAR` (~465 words) is **derived programmatically** in `constants.ts` from `SEED_CATEGORIES` + every `CATEGORY_SYNONYMS` key + fixed/related vocab + `[unk]`, so it can't drift. **Rule: any word the parser must understand has to be reachable in the grammar** (a build-time check asserts zero coverage gaps).
+
+- **Numbers are spoken as WORDS, not digits** (grammar has no usable digit path on-device). `src/parser/numberWords.ts` (`normalizeNumberWords`) converts word-numbers → digits inside `parseIntent`, before the regexes, after date stripping. Handles ones/teens/tens/hundred/thousand + Indian lakh/crore.
+
+- **`categoryMatcher` cascade is exact → `CATEGORY_SYNONYMS` → fuzzy.** The synonym map bridges what fuzzy can't (jim→Gym, petrol→Fuel, ola→Auto, swiggy→Restaurant…) while keeping precision (gas→Gas, not Fuel).
+
+- **Periods carry a representative DATE for ADD** ("last month"→same day prev month, "last week"→today−7, "a month ago"→−1 month) so ADD isn't dated today; QUERY still uses the range. `Period` (incl. `last_week`) is centralized in `dateResolver.ts`; `queries.ts` re-exports it and delegates `resolvePeriod`→`periodToRange`.
+
+- **`cleanCategoryCapture()` strips leftover temporal/filler tokens** (last, ago, week, month, prepositions, `[unk]`…) from both ends of every category capture in the ADD and QUERY paths — safety net against date-phrase bleed.
+
+- **EXPORT is a stub** — orchestrator speaks "coming soon"; wire `src/export/csvExporter.ts` into `case 'EXPORT'` in Phase 5.
+
+- **Other additions:** store `refreshAll()` + `monthlyTotal`; `getCategoryStats()` (per-category count+total in one query); `parentColor()` + `SEED_CATEGORY_NAMES` (constants); `settings` table + `settingsRepository.ts` for the persisted confirm-before-submit toggle; `CommandEditorModal` + "Type a command instead" button for manual/edited entry; History/Categories reload via `useFocusEffect`.
+
+- **Tests:** orchestrator/screens are verified manually on-device (DB/TTS/Vosk side effects); parser logic is fully covered by the pure suite (126 tests).
 

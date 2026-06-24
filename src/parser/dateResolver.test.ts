@@ -132,9 +132,11 @@ describe('dateResolver', () => {
     expect(period).toBe('this_month');
   });
 
-  test('"last month" → period: last_month, date: today', () => {
+  test('"last month" → period: last_month, date: SAME DAY last month (for ADD)', () => {
+    // The date must land INSIDE last month so "spent 20 on gym last month" is not
+    // dated today. NOW is 2026-06-22 → last-month date is 2026-05-22.
     const { date, period } = resolveDate('total groceries last month', NOW);
-    expect(date).toBe('2026-06-22');
+    expect(date).toBe('2026-05-22');
     expect(period).toBe('last_month');
   });
 
@@ -142,6 +144,24 @@ describe('dateResolver', () => {
     const { date, period } = resolveDate('show expenses this week', NOW);
     expect(date).toBe('2026-06-22');
     expect(period).toBe('this_week');
+  });
+
+  test('"last week" → period: last_week, date: today − 7', () => {
+    const { date, period } = resolveDate('show expenses last week', NOW);
+    expect(date).toBe('2026-06-15');
+    expect(period).toBe('last_week');
+  });
+
+  test('"a month ago" → last_month period, date one month back', () => {
+    const { date, period } = resolveDate('gym 500 paid a month ago', NOW);
+    expect(date).toBe('2026-05-22');
+    expect(period).toBe('last_month');
+  });
+
+  test('"two months ago" → date two months back, no period', () => {
+    const { date, period } = resolveDate('gym 500 two months ago', NOW);
+    expect(date).toBe('2026-04-22');
+    expect(period).toBeNull();
   });
 
   test('period phrase stripped from cleaned', () => {
@@ -158,5 +178,56 @@ describe('dateResolver', () => {
   test('"10 june" → 2026-06-10', () => {
     const { date } = resolveDate('grocery 800 10 june', NOW);
     expect(date).toBe('2026-06-10');
+  });
+
+  // ── word ordinals (free-dictation produces these) ───────────────────────────
+  test('"on the fifteenth" → 15th of current month', () => {
+    const { date, cleaned } = resolveDate('gym 500 paid on the fifteenth', NOW);
+    expect(date).toBe('2026-06-15');
+    expect(cleaned).not.toContain('fifteenth');
+  });
+
+  test('"on fifteenth" (no "the") → 15th', () => {
+    const { date } = resolveDate('gym 500 on fifteenth', NOW);
+    expect(date).toBe('2026-06-15');
+  });
+
+  test('"on the twenty first" → 21st (compound word ordinal)', () => {
+    const { date } = resolveDate('rent 15000 on the twenty first', NOW);
+    expect(date).toBe('2026-06-21');
+  });
+
+  test('"on the twenty fifth" (future this month) → previous month 25th', () => {
+    // base is the 22nd, so the 25th would be future → roll to May.
+    const { date } = resolveDate('gym 500 on the twenty fifth', NOW);
+    expect(date).toBe('2026-05-25');
+  });
+
+  // ── weeks ────────────────────────────────────────────────────────────────────
+  test('"a week ago" → today − 7', () => {
+    const { date, cleaned } = resolveDate('gym 500 paid a week ago', NOW);
+    expect(date).toBe('2026-06-15');
+    expect(cleaned).not.toContain('week');
+  });
+
+  test('"two weeks ago" → today − 14', () => {
+    const { date } = resolveDate('gym 500 paid two weeks ago', NOW);
+    expect(date).toBe('2026-06-08');
+  });
+
+  // ── whitespace / casing robustness ──────────────────────────────────────────
+  test('irregular spacing: "last   month" still resolves to last_month', () => {
+    const { period } = resolveDate('total grocery last   month', NOW);
+    expect(period).toBe('last_month');
+  });
+
+  test('uppercase: "LAST MONTH" resolves to last_month', () => {
+    const { period } = resolveDate('TOTAL GROCERY LAST MONTH', NOW);
+    expect(period).toBe('last_month');
+  });
+
+  test('leading/trailing whitespace is trimmed before matching', () => {
+    const { period } = resolveDate('   show expenses this month   ', NOW);
+    expect(period).toBe('this_month');
   });
 });

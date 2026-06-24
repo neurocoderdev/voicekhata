@@ -35,6 +35,74 @@ function parse(text: string) {
   return parseIntent(text, SEED_CATEGORIES);
 }
 
+const todayStr = () => new Date().toISOString().split('T')[0];
+
+// ── reported real-world failures (regression guard) ─────────────────────────────
+// Each of these produced wrong output on-device before the period/stop-word fixes.
+
+describe('reported failing commands', () => {
+  test('"spent 500 on grocery last week" → ADD Grocery, last_week, date NOT today', () => {
+    const r = parse('spent 500 on grocery last week');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBe(500);
+    expect(r.categoryId).toBe(6); // Grocery — "last" must not bleed in
+    expect(r.period).toBe('last_week');
+    expect(r.date).not.toBe(todayStr());
+  });
+
+  test('"spent 20 on groceries" → ADD Grocery (plural fuzzy)', () => {
+    const r = parse('spent 20 on groceries');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBe(20);
+    expect(r.categoryId).toBe(6);
+  });
+
+  test('"spent 20 on gym last month" → date in last month, not today', () => {
+    const r = parse('spent 20 on gym last month');
+    expect(r.action).toBe('ADD');
+    expect(r.categoryId).toBe(1); // Gym
+    expect(r.period).toBe('last_month');
+    expect(r.date).not.toBe(todayStr());
+  });
+
+  test('"spent 20 on gym a month ago" → date in last month, not today', () => {
+    const r = parse('spent 20 on gym a month ago');
+    expect(r.action).toBe('ADD');
+    expect(r.categoryId).toBe(1);
+    expect(r.date).not.toBe(todayStr());
+  });
+
+  test('"spent 500 for gym yesterday" → ADD Gym, date is yesterday', () => {
+    const r = parse('spent 500 for gym yesterday');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBe(500);
+    expect(r.categoryId).toBe(1);
+    expect(r.date).not.toBe(todayStr());
+  });
+
+  test('"how much spent for snacks last week" → QUERY Snacks, last_week', () => {
+    const r = parse('how much spent for snacks last week');
+    expect(r.action).toBe('QUERY');
+    expect(r.categoryId).toBe(17); // Snacks — "last" must not bleed in
+    expect(r.period).toBe('last_week');
+  });
+
+  test('"two months ago gym 500" → ADD Gym, date not today', () => {
+    const r = parse('two months ago gym 500');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBe(500);
+    expect(r.categoryId).toBe(1);
+    expect(r.date).not.toBe(todayStr());
+  });
+
+  test('"how much spent on snacks last month" → QUERY Snacks, last_month', () => {
+    const r = parse('how much spent on snacks last month');
+    expect(r.action).toBe('QUERY');
+    expect(r.categoryId).toBe(17);
+    expect(r.period).toBe('last_month');
+  });
+});
+
 // ── ADD intents ───────────────────────────────────────────────────────────────
 
 describe('ADD intents', () => {
@@ -307,13 +375,37 @@ describe('fuzzy category matching', () => {
     expect(r.categoryId).toBe(6); // Grocery
   });
 
-  // "jim" is too short to fuzzy-match "Gym" at threshold 0.4 in Fuse.js.
-  // A realistic Vosk misrecognition is "gim" which does match.
   test('"gim 300 paid" → Gym (fuzzy — realistic Vosk misrecognition)', () => {
     const r = parse('gim 300 paid');
     expect(r.action).toBe('ADD');
     expect(r.amount).toBe(300);
     expect(r.categoryId).toBe(1); // Gym
+  });
+
+  // "jim" is phonetically too distant for Fuse — handled by the synonym map.
+  test('"jim 300 paid" → Gym (synonym map)', () => {
+    const r = parse('jim 300 paid');
+    expect(r.action).toBe('ADD');
+    expect(r.categoryId).toBe(1); // Gym
+  });
+
+  test('"spent 500 on petrol" → Fuel (synonym map)', () => {
+    const r = parse('spent 500 on petrol');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBe(500);
+    expect(r.categoryId).toBe(14); // Fuel
+  });
+
+  test('"coffee 50 paid" → Tea/Coffee (synonym map)', () => {
+    const r = parse('coffee 50 paid');
+    expect(r.action).toBe('ADD');
+    expect(r.categoryId).toBe(18); // Tea/Coffee
+  });
+
+  test('"gas 200 paid" stays Gas, not Fuel (synonym precision)', () => {
+    const r = parse('gas 200 paid');
+    expect(r.action).toBe('ADD');
+    expect(r.categoryId).toBe(9); // Gas
   });
 
   test('"electrisity 800" → Electricity (fuzzy)', () => {
@@ -326,6 +418,139 @@ describe('fuzzy category matching', () => {
     const r = parse('spent 400 on resturant');
     expect(r.action).toBe('ADD');
     expect(r.categoryId).toBe(16); // Restaurant
+  });
+});
+
+// ── ADD with missing amount (category understood, no number) ────────────────────
+// The orchestrator turns these into "I heard the category but not the amount."
+
+describe('ADD with missing amount', () => {
+  test('"gym" alone → ADD, amount null, category resolved', () => {
+    const r = parse('gym');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBeNull();
+    expect(r.categoryId).toBe(1);
+  });
+
+  test('"gym paid" → ADD, amount null', () => {
+    const r = parse('gym paid');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBeNull();
+    expect(r.categoryId).toBe(1);
+  });
+
+  test('"spent on grocery" (verb present) → ADD, amount null', () => {
+    const r = parse('spent on grocery');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBeNull();
+    expect(r.categoryId).toBe(6);
+  });
+
+  test('fuzzy category WITH verb, no amount: "paid grosory" → ADD null amount, Grocery', () => {
+    const r = parse('paid grosory');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBeNull();
+    expect(r.categoryId).toBe(6);
+  });
+
+  test('bare fuzzy noun with NO verb is NOT an ADD: "weather" → UNKNOWN', () => {
+    // "weather" fuzzy-matches Water — must not be swallowed without expense context.
+    const r = parse('weather');
+    expect(r.action).toBe('UNKNOWN');
+  });
+
+  test('unknown noun with no amount stays UNKNOWN: "hello"', () => {
+    // hello fuzzy-matches Health; with no verb/exact match it must stay UNKNOWN.
+    const r = parse('hello');
+    expect(r.action).toBe('UNKNOWN');
+  });
+
+  test('"what is the weather" stays UNKNOWN', () => {
+    const r = parse('what is the weather');
+    expect(r.action).toBe('UNKNOWN');
+  });
+});
+
+// ── spoken number words (real Vosk grammar output) ─────────────────────────────
+// Vosk runs grammar-constrained and emits numbers as WORDS, never digits. These
+// mirror what the device actually produces — the parser MUST convert them.
+
+describe('spoken number words → digit amounts', () => {
+  test('"gym five hundred rupees paid" → 500', () => {
+    const r = parse('gym five hundred rupees paid');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBe(500);
+    expect(r.categoryId).toBe(1);
+  });
+
+  test('"spent one thousand on grocery" → 1000', () => {
+    const r = parse('spent one thousand on grocery');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBe(1000);
+    expect(r.categoryId).toBe(6);
+  });
+
+  test('"add two hundred to gym" → 200', () => {
+    const r = parse('add two hundred to gym');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBe(200);
+    expect(r.categoryId).toBe(1);
+  });
+
+  test('"grocery eight hundred" → 800', () => {
+    const r = parse('grocery eight hundred');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBe(800);
+    expect(r.categoryId).toBe(6);
+  });
+
+  test('"paid rent fifteen thousand" → 15000', () => {
+    const r = parse('paid rent fifteen thousand');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBe(15000);
+    expect(r.categoryId).toBe(10);
+  });
+
+  test('"tea ten paid" → 10', () => {
+    const r = parse('tea ten paid');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBe(10);
+  });
+
+  test('"gym twenty five paid" → 25 (compound tens+units)', () => {
+    const r = parse('gym twenty five paid');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBe(25);
+    expect(r.categoryId).toBe(1);
+  });
+
+  test('"gym one hundred and fifty paid" → 150 ("and" filler)', () => {
+    const r = parse('gym one hundred and fifty paid');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBe(150);
+    expect(r.categoryId).toBe(1);
+  });
+
+  test('"spent one lakh on grocery" → 100000 (Indian numbering)', () => {
+    const r = parse('spent one lakh on grocery');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBe(100000);
+    expect(r.categoryId).toBe(6);
+  });
+
+  test('spoken number with date: "gym five hundred paid yesterday"', () => {
+    const today = new Date().toISOString().split('T')[0];
+    const r = parse('gym five hundred paid yesterday');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBe(500);
+    expect(r.date).not.toBe(today);
+  });
+
+  test('leading [unk] token does not break parse', () => {
+    const r = parse('[unk] gym five hundred paid');
+    expect(r.action).toBe('ADD');
+    expect(r.amount).toBe(500);
+    expect(r.categoryId).toBe(1);
   });
 });
 

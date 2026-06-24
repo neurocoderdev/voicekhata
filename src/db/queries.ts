@@ -1,41 +1,18 @@
-import { format, startOfMonth, endOfMonth, subMonths, startOfWeek } from 'date-fns';
+import { format, subMonths } from 'date-fns';
+import { periodToRange, type Period } from '../parser/dateResolver';
 
-export type Period = 'this_month' | 'last_month' | 'this_week';
+export type { Period };
 
 export type DateRange = {
   startDate: string;
   endDate: string;
 };
 
+// Delegate range computation to the parser's periodToRange (single source of
+// truth — see Phase 2 note). Null period defaults to the current month.
 export function resolvePeriod(period: Period | null): DateRange {
-  const now = new Date();
-  const fmt = (d: Date) => format(d, 'yyyy-MM-dd');
-
-  switch (period) {
-    case 'this_month':
-      return {
-        startDate: fmt(startOfMonth(now)),
-        endDate: fmt(endOfMonth(now)),
-      };
-    case 'last_month': {
-      const lastMonth = subMonths(now, 1);
-      return {
-        startDate: fmt(startOfMonth(lastMonth)),
-        endDate: fmt(endOfMonth(lastMonth)),
-      };
-    }
-    case 'this_week':
-      return {
-        startDate: fmt(startOfWeek(now, { weekStartsOn: 1 })),
-        endDate: fmt(now),
-      };
-    default:
-      // Default to current month when period is null
-      return {
-        startDate: fmt(startOfMonth(now)),
-        endDate: fmt(endOfMonth(now)),
-      };
-  }
+  if (period == null) return periodToRange('this_month');
+  return periodToRange(period);
 }
 
 export function describePeriod(period: Period | null): string {
@@ -48,6 +25,8 @@ export function describePeriod(period: Period | null): string {
       return `last month (${format(subMonths(now, 1), 'MMMM')})`;
     case 'this_week':
       return 'this week';
+    case 'last_week':
+      return 'last week';
     default:
       return `this month (${format(now, 'MMMM')})`;
   }
