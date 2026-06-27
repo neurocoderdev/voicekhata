@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import type { ExpenseWithCategory } from '../db/expenseRepository';
 import { formatCurrency, formatExpenseDate } from '../utils/formatters';
@@ -10,7 +11,10 @@ type Props = {
   showParent?: boolean;
 };
 
-export function ExpenseCard({ expense, showParent = false }: Props) {
+// Memoized: in long History lists (500+ rows) this stops every card from
+// re-rendering when only the FlatList window scrolls. Rows are immutable once
+// rendered, so a shallow prop compare is exact.
+export const ExpenseCard = memo(function ExpenseCard({ expense, showParent = false }: Props) {
   return (
     <View style={styles.row}>
       <View style={[styles.dot, { backgroundColor: parentColor(expense.category_parent) }]} />
@@ -31,7 +35,7 @@ export function ExpenseCard({ expense, showParent = false }: Props) {
       <Text style={styles.amount}>{formatCurrency(expense.amount)}</Text>
     </View>
   );
-}
+});
 
 const C = {
   surface: '#16162a',

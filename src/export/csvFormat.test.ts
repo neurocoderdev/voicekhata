@@ -1,4 +1,11 @@
-import { buildCsv, buildSummary, escapeCsvField, monthDirName } from './csvFormat';
+import {
+  buildCsv,
+  buildSummary,
+  escapeCsvField,
+  monthDirName,
+  isStorageFullError,
+  STORAGE_FULL_MESSAGE,
+} from './csvFormat';
 import type { ExpenseWithCategory, CategoryTotal } from '../db/expenseRepository';
 
 // Helper to build a minimal ExpenseWithCategory row for tests.
@@ -116,5 +123,33 @@ describe('monthDirName', () => {
     expect(monthDirName(new Date(2026, 5, 1))).toBe('06-June');
     expect(monthDirName(new Date(2026, 0, 15))).toBe('01-January');
     expect(monthDirName(new Date(2026, 11, 31))).toBe('12-December');
+  });
+});
+
+describe('isStorageFullError', () => {
+  test('matches the common out-of-space spellings', () => {
+    expect(isStorageFullError('write failed: ENOSPC (No space left on device)')).toBe(true);
+    expect(isStorageFullError('No space left on device')).toBe(true);
+    expect(isStorageFullError('Disk full')).toBe(true);
+    expect(isStorageFullError('Not enough space to write file')).toBe(true);
+    expect(isStorageFullError('Insufficient storage available')).toBe(true);
+  });
+
+  test('is case-insensitive', () => {
+    expect(isStorageFullError('enospc')).toBe(true);
+    expect(isStorageFullError('NO SPACE LEFT')).toBe(true);
+  });
+
+  test('classifies the already-converted STORAGE_FULL_MESSAGE (round-trip)', () => {
+    // exportMonth re-throws this exact string; downstream callers must still
+    // recognize it as storage-full so they speak it as-is, not double-wrapped.
+    expect(isStorageFullError(STORAGE_FULL_MESSAGE)).toBe(true);
+  });
+
+  test('does not match unrelated errors', () => {
+    expect(isStorageFullError('Permission denied')).toBe(false);
+    expect(isStorageFullError('Network unreachable')).toBe(false);
+    expect(isStorageFullError('Could not open database')).toBe(false);
+    expect(isStorageFullError('')).toBe(false);
   });
 });

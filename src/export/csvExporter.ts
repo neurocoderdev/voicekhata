@@ -10,10 +10,17 @@ import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns';
 import { getExpensesByDateRange, getMonthlySummary } from '../db/expenseRepository';
 import { getAllCategories, type Category } from '../db/categoryRepository';
 import { getSetting, setSetting } from '../db/settingsRepository';
-import { buildCsv, buildSummary, monthDirName } from './csvFormat';
+import { buildCsv, buildSummary, monthDirName, isStorageFullError, STORAGE_FULL_MESSAGE } from './csvFormat';
 
 // Re-export pure builders for single-import convenience.
-export { buildCsv, buildSummary, escapeCsvField, monthDirName } from './csvFormat';
+export {
+  buildCsv,
+  buildSummary,
+  escapeCsvField,
+  monthDirName,
+  isStorageFullError,
+  STORAGE_FULL_MESSAGE,
+} from './csvFormat';
 
 // ─── Storage strategy ───────────────────────────────────────────────────────
 //
@@ -184,6 +191,11 @@ export async function exportMonth(year: number, month: number): Promise<ExportRe
     await writeAsStringAsync(summaryUri, summary);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    // Out-of-space shows up as ENOSPC / "no space"/"disk full" across the
+    // file-system layers; give the user the actionable message in that case.
+    if (isStorageFullError(msg)) {
+      throw new Error(STORAGE_FULL_MESSAGE);
+    }
     throw new Error(`Could not save the export: ${msg}`);
   }
 

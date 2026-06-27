@@ -19,7 +19,7 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "permissions": ["RECORD_AUDIO"]
+      "permissions": ["RECORD_AUDIO", "VIBRATE"]
     },
     "plugins": [
       "expo-router",

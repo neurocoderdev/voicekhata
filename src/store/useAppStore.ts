@@ -15,6 +15,9 @@ type AppState = {
   monthlyTotal: number;
   isModelLoaded: boolean;
   isDbReady: boolean;
+  // True when initDatabase had to rebuild a corrupted database on this launch —
+  // the Home screen shows a one-shot banner so the user knows prior data was lost.
+  dbRecovered: boolean;
   // When true, a recognized/typed command opens an editable confirm popup before
   // it is executed. Persisted in the settings table.
   confirmBeforeSubmit: boolean;
@@ -28,6 +31,7 @@ type AppState = {
   setConfirmBeforeSubmit: (value: boolean) => Promise<void>;
   setModelLoaded: (loaded: boolean) => void;
   setDbReady: (ready: boolean) => void;
+  setDbRecovered: (recovered: boolean) => void;
 };
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -36,6 +40,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   monthlyTotal: 0,
   isModelLoaded: false,
   isDbReady: false,
+  dbRecovered: false,
   confirmBeforeSubmit: false,
 
   refreshCategories: async () => {
@@ -75,4 +80,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   setModelLoaded: (loaded) => set({ isModelLoaded: loaded }),
 
   setDbReady: (ready) => set({ isDbReady: ready }),
+
+  setDbRecovered: (recovered) => set({ dbRecovered: recovered }),
 }));

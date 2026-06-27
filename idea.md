@@ -985,3 +985,39 @@ Changes or deviations from the plan discovered during actual implementation.
 
 - **Tests:** 142 total (126 parser + 16 `csvFormat`), all green. File I/O / SAF / sharing / auto-export remain manual on-device (native side effects).
 
+### Phase 6
+
+- **DB corruption recovery in `initDatabase()`:** Split into `initDatabase()` (try → `openAndMigrate()`; on throw: `closeAsync` + `deleteDatabaseAsync(DB_NAME)` + one rebuild) and `openAndMigrate()` (open + DDL + a forced `SELECT COUNT(*) FROM categories` **sanity probe** so corruption that only manifests on first read surfaces inside the try/catch, not at a random later query). **Return type changed** `Promise<void>` → `Promise<{ recovered: boolean }>`. Sole caller is `app/_layout.tsx`. A second failure propagates so the layout can show the DB-error gate. `recovered` drives a one-shot "data was reset" warning banner on Home (store: `dbRecovered` / `setDbRecovered`).
+
+- **App boot is gated in `app/_layout.tsx`:** a `dbPhase` state (`loading` | `ready` | `error`) renders `LoadingGate` (splash), `DbErrorGate` (retry button → re-runs `boot()`), or the `Tabs` tree. **Consequence:** the Vosk model load (kicked in `index.tsx` on mount) now starts *after* DB boot rather than concurrently — DB init is sub-second on a small DB so the added latency is negligible, and it removes the class of bugs from screens mounting against an unready DB. The per-screen `if (!isDbReady)` spinners in `history.tsx`/`categories.tsx` are now effectively dead but kept as defensive guards.
+
+- **Error boundary:** `src/components/ErrorBoundary.tsx` (class component, `getDerivedStateFromError`) wraps the `Tabs` tree so a render crash shows a recoverable "Something went wrong / Try again" screen instead of a white (release) / red (dev) screen.
+
+- **Vosk model-load retry:** `useSpeechRecognition` exposes `modelLoadFailed`; `loadModel()` is idempotent and re-callable after a failure (loadedRef stays false, loadingRef resets), so the Home "↻ Voice failed to load — Retry" button just calls `loadModel()` again.
+
+- **Mic permission denied:** `react-native-vosk`'s `start()` itself calls `PermissionsAndroid.request(RECORD_AUDIO)` and **rejects with the string `'Record permission not granted'`** when denied. The hook matches `/permission/i` in the `start()` catch → sets `micPermissionDenied` → Home shows "🎤 Allow microphone — Open Settings" which calls `Linking.openSettings()` (MIUI won't re-prompt once denied). The flag is cleared on a successful `start()` **and** on app foreground (`AppState` → `active`), since the user may have just granted it in Settings.
+
+- **Background mid-recognition → ABANDON, don't commit:** `AppState` `change` to non-`active` while listening calls a new `abortSession()` that releases native + resets state but **never bumps `resultId`/`emptyResultId`**. An earlier version called `finishSession()` here, which bumped `resultId` and caused the Home `resultId` effect to **auto-dispatch a half-spoken, unconfirmed command** on return to foreground — a silent-wrong-save hazard. Dropping the fragment is correct.
+
+- **Storage-full export:** `exportMonth` maps `ENOSPC`/"no space"/"disk full"/… write errors to the user-ready `STORAGE_FULL_MESSAGE` ("Storage full. Free some space and try again."). The classifier `isStorageFullError()` (pure, in `csvFormat.ts`, unit-tested) **must also match `STORAGE_FULL_MESSAGE` itself** — `exportMonth` re-throws the already-converted string, and the orchestrator re-classifies it to decide whether to speak it as-is vs. wrap it in the generic apology. Forgetting this makes the as-is branch dead code (it double-wraps to "Sorry, I could not export. Storage full…").
+
+- **Haptics without a new dependency:** mic-tap feedback uses RN core `Vibration.vibrate(15)` (not `expo-haptics`) — no native module, no APK weight, best-effort. Needs `VIBRATE` in `app.json` android permissions (RN also adds it by default, so it was already in the manifest).
+
+- **Perf:** `ExpenseCard` wrapped in `React.memo` (rows are immutable; stops full-list re-render on scroll); History `FlatList` got `initialNumToRender=12`, `maxToRenderPerBatch=10`, `windowSize=11`, `removeClippedSubviews` for 500+ row smoothness.
+
+- **`androidStatusBar` / `androidNavigationBar` in `app.json` are DEPRECATED and have NO EFFECT** in this Expo SDK (prebuild prints `SYSTEM_BARS_PLUGIN` warnings). Removed them. Status-bar icon style comes from the runtime `<StatusBar style="light" />` (expo-status-bar) in `_layout.tsx`; the dark app background shows through under edge-to-edge. `SafeAreaProvider` (react-native-safe-area-context, already a dep) now wraps the app.
+
+- **Orientation** is locked to portrait via `app.json` `"orientation": "portrait"` (already set since Phase 0) — no separate lock needed.
+
+- **Release APK signing:** the Expo-generated `android/app/build.gradle` signs the `release` build with the bundled `debug.keystore` by default. This produces an installable signed release APK fine for personal/sideload use. A Play Store release would require generating a real upload keystore and wiring it into `signingConfigs.release`.
+
+- **APK size — build arm64-only:** the default `./gradlew assembleRelease` produces a **universal APK = 173 MB** (native libs for all 4 ABIs: armeabi-v7a, arm64-v8a, x86, x86_64). The Poco M2 Pro (Snapdragon 720G) is **arm64-v8a**, so build for that one ABI:
+  ```bash
+  cd android && ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
+  ```
+  This drops the other 3 ABIs' `.so` files → **87 MB**. Breakdown: Vosk model in assets ≈ 60 MB (the irreducible floor), arm64 native libs ≈ 32 MB, dex ≈ 40 MB uncompressed. 87 MB is ~7 MB over the soft < 80 MB target; the model is the floor and the risk register already calls 80 MB "acceptable" for an offline app. **Decision: ship 87 MB arm64 as-is for v1.0.**
+
+- **R8 minify is OFF and currently blocked:** enabling `-Pandroid.enableMinifyInReleaseBuilds=true` would shave ~15–20 MB of dex (→ ~68–72 MB) but **R8 fails**: `Missing class java.awt.Component (referenced from com.sun.jna.Native.getWindowHandle0)` — JNA (pulled in by Vosk's native dispatch) references desktop-Java AWT classes absent on Android. Fix requires `-dontwarn java.awt.**` in `proguard-rules.pro`, but `android/` is gitignored (regenerated by prebuild), so to persist it you'd add the `expo-build-properties` config plugin with `extraProguardRules`. Deferred — not worth the added build complexity to recover 7 MB for a personal app.
+
+- **Tests:** 146 total (126 parser + 20 export incl. `isStorageFullError` round-trip), all green. Error/permission/background/recovery flows remain manual on-device (native side effects).
+

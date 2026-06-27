@@ -1,10 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
   Animated,
   Easing,
   StyleSheet,
   TouchableOpacity,
+  Vibration,
   View,
 } from 'react-native';
 
@@ -60,9 +61,17 @@ export function MicButton({ isModelLoaded, isListening, isTtsSpeaking, onPress }
   const isDisabled = !isModelLoaded || isTtsSpeaking;
   const buttonColor = isListening ? '#e05260' : isDisabled ? '#2e2e50' : '#7c83fd';
 
+  // Brief tactile confirmation on tap. Vibration (RN core) avoids adding the
+  // expo-haptics dependency — no native rebuild, no APK weight. Best-effort:
+  // devices without a vibrator (or with it disabled) silently no-op.
+  const handlePress = useCallback(() => {
+    try { Vibration.vibrate(15); } catch {}
+    onPress();
+  }, [onPress]);
+
   return (
     <TouchableOpacity
-      onPress={onPress}
+      onPress={handlePress}
       disabled={isDisabled}
       activeOpacity={0.8}
       style={styles.wrapper}

@@ -11,6 +11,7 @@ import {
   exportCurrentMonth,
   exportLastMonth,
   shareFile,
+  isStorageFullError,
   type ExportResult,
 } from '../export/csvExporter';
 import { useAppStore } from '../store/useAppStore';
@@ -207,9 +208,13 @@ export function useVoiceCommand(tts: TtsState): VoiceCommandApi {
             } catch (e) {
               const m = e instanceof Error ? e.message : String(e);
               console.warn('[useVoiceCommand] export failed:', m);
+              // "Storage full…" is already a complete, user-ready sentence — speak
+              // it as-is. Anything else gets the generic apology wrapper.
               outcome = {
                 kind: 'error',
-                message: `Sorry, I could not export. ${e instanceof Error ? e.message : 'Please try again.'}`,
+                message: isStorageFullError(m)
+                  ? m
+                  : `Sorry, I could not export. ${e instanceof Error ? m : 'Please try again.'}`,
               };
               break;
             }

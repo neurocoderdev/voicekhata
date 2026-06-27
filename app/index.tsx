@@ -31,6 +31,7 @@ export default function HomeScreen() {
   const { handleCommand } = useVoiceCommand(tts);
 
   const isDbReady = useAppStore((s) => s.isDbReady);
+  const dbRecovered = useAppStore((s) => s.dbRecovered);
   const monthlyTotal = useAppStore((s) => s.monthlyTotal);
   const recentExpenses = useAppStore((s) => s.recentExpenses);
   const refreshAll = useAppStore((s) => s.refreshAll);
@@ -45,6 +46,8 @@ export default function HomeScreen() {
   // One-shot banner shown when the previous month was auto-exported on launch.
   const [autoExportBanner, setAutoExportBanner] = useState<string | null>(null);
   const autoExportRanRef = useRef(false);
+  // One-shot banner if the DB had to be rebuilt after corruption this launch.
+  const [recoveredDismissed, setRecoveredDismissed] = useState(false);
 
   // Editor modal state.
   const [editorVisible, setEditorVisible] = useState(false);
@@ -247,6 +250,21 @@ export default function HomeScreen() {
               <Text style={styles.summaryLabel}>spent this month</Text>
             </View>
 
+            {/* ── DB-recovery banner (one-shot, tap to dismiss) ─────────── */}
+            {dbRecovered && !recoveredDismissed ? (
+              <TouchableOpacity
+                style={styles.warnBanner}
+                onPress={() => setRecoveredDismissed(true)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.warnBannerText}>
+                  ⚠ Your data file was damaged and has been reset. Categories were restored;
+                  previous expenses could not be recovered.
+                </Text>
+                <Text style={styles.bannerDismiss}>Tap to dismiss</Text>
+              </TouchableOpacity>
+            ) : null}
+
             {/* ── Auto-export banner (one-shot, tap to dismiss) ─────────── */}
             {autoExportBanner ? (
               <TouchableOpacity
@@ -306,15 +324,25 @@ export default function HomeScreen() {
                 isTtsSpeaking={tts.isSpeaking}
                 onPress={handleMicPress}
               />
-              <Text style={styles.micHint}>
-                {!stt.isModelLoaded
-                  ? 'Loading model…'
-                  : stt.isListening
-                    ? 'Tap to stop'
-                    : tts.isSpeaking
-                      ? 'Speaking…'
-                      : 'Tap to speak'}
-              </Text>
+              {stt.micPermissionDenied ? (
+                <TouchableOpacity style={styles.retryBtn} onPress={stt.openAppSettings} activeOpacity={0.8}>
+                  <Text style={styles.retryText}>🎤 Allow microphone — Open Settings</Text>
+                </TouchableOpacity>
+              ) : stt.modelLoadFailed ? (
+                <TouchableOpacity style={styles.retryBtn} onPress={stt.loadModel} activeOpacity={0.8}>
+                  <Text style={styles.retryText}>↻ Voice failed to load — Retry</Text>
+                </TouchableOpacity>
+              ) : (
+                <Text style={styles.micHint}>
+                  {!stt.isModelLoaded
+                    ? 'Loading model…'
+                    : stt.isListening
+                      ? 'Tap to stop'
+                      : tts.isSpeaking
+                        ? 'Speaking…'
+                        : 'Tap to speak'}
+                </Text>
+              )}
             </View>
 
             {/* ── Type here ─────────────────────────────────────────────── */}
@@ -452,6 +480,29 @@ const styles = StyleSheet.create({
   },
   bannerText: { color: C.green, fontSize: 13, fontWeight: '600' },
   bannerDismiss: { color: C.dim, fontSize: 11 },
+
+  // Warning banner (e.g. DB reset after corruption)
+  warnBanner: {
+    backgroundColor: '#2e1a0f',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#5a3a1f',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 8,
+  },
+  warnBannerText: { color: C.amber, fontSize: 12.5, lineHeight: 18, fontWeight: '600' },
+
+  // Voice-load retry
+  retryBtn: {
+    marginTop: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: C.red,
+    paddingVertical: 8,
+    paddingHorizontal: 18,
+  },
+  retryText: { color: C.red, fontSize: 13, fontWeight: '700' },
 
   // Export folder chooser
   folderRow: {

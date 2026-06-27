@@ -59,6 +59,12 @@ export default function HistoryScreen() {
       }
       renderItem={({ item }) => <ExpenseCard expense={item} showParent />}
       showsVerticalScrollIndicator={false}
+      // Perf for long histories (500+ rows): render a screenful first, fill the
+      // rest in small batches, and recycle off-screen rows.
+      initialNumToRender={12}
+      maxToRenderPerBatch={10}
+      windowSize={11}
+      removeClippedSubviews
     />
   );
 }

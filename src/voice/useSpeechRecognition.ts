@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState, Linking } from 'react-native';
 import * as Vosk from 'react-native-vosk';
 import { VOSK_GRAMMAR } from '../utils/constants';
 
@@ -15,10 +16,18 @@ export type SpeechRecognitionState = {
   // respond ("I didn't catch that") to a silent stop, which resultId never signals.
   emptyResultId: number;
   error: string | null;
+  // True when loadModel() failed (vs. a transient recognition error). Drives the
+  // "Couldn't load voice — Retry" affordance on the Home screen.
+  modelLoadFailed: boolean;
+  // True when the microphone permission was denied. The Home screen shows an
+  // explain row with "Open Settings" since MIUI won't re-prompt once denied.
+  micPermissionDenied: boolean;
   loadModel: () => Promise<void>;
   startListening: () => Promise<void>;
   stopListening: () => Promise<void>;
   clearResults: () => void;
+  // Open the OS app-settings screen so the user can grant the mic permission.
+  openAppSettings: () => void;
 };
 
 const MODEL_PATH = 'model-en-in';
@@ -72,6 +81,8 @@ export function useSpeechRecognition(): SpeechRecognitionState {
   // Bumps when a listening session ends with no recognized speech at all.
   const [emptyResultId, setEmptyResultId] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [modelLoadFailed, setModelLoadFailed] = useState(false);
+  const [micPermissionDenied, setMicPermissionDenied] = useState(false);
 
   // Refs mirror the latest values for use inside event callbacks (no stale closure).
   const loadingRef = useRef(false);
@@ -129,6 +140,7 @@ export function useSpeechRecognition(): SpeechRecognitionState {
     if (loadedRef.current || loadingRef.current) return;
     loadingRef.current = true;
     setError(null);
+    setModelLoadFailed(false);
 
     // A previous JS bundle (Fast Refresh) may have left a live SpeechService and
     // model inside the native singleton. unload() stops the recognizer AND closes
@@ -141,9 +153,11 @@ export function useSpeechRecognition(): SpeechRecognitionState {
       await Vosk.loadModel(MODEL_PATH);
       loadedRef.current = true;
       setIsModelLoaded(true);
+      setModelLoadFailed(false);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      setError(`Model load failed: ${msg}`);
+      setError(`Could not load the voice model. ${msg}`);
+      setModelLoadFailed(true);
     } finally {
       loadingRef.current = false;
     }
@@ -202,6 +216,23 @@ export function useSpeechRecognition(): SpeechRecognitionState {
 
     clearWatchdog();
     clearSubscriptions();
+  }, [clearSubscriptions, clearWatchdog]);
+
+  // Abandon the current session WITHOUT committing a result. Unlike
+  // finishSession, this never bumps resultId/emptyResultId — so it can't trigger
+  // a downstream auto-dispatch of a half-spoken command. Used when the app is
+  // backgrounded mid-recognition: discarding an unfinished, unconfirmed command
+  // is safer than silently saving whatever fragment was captured.
+  const abortSession = useCallback(() => {
+    listeningRef.current = false;
+    stoppingRef.current = false;
+    finalizedRef.current = true; // mark handled so a late native event is ignored
+    accumRef.current = '';
+    setIsListening(false);
+    setPartialResult('');
+    clearWatchdog();
+    clearSubscriptions();
+    try { Vosk.stop(); } catch {}
   }, [clearSubscriptions, clearWatchdog]);
 
   // ── Start listening ────────────────────────────────────────────────────────
@@ -288,6 +319,7 @@ export function useSpeechRecognition(): SpeechRecognitionState {
       await Vosk.start(startOptions);
       listeningRef.current = true;
       setIsListening(true);
+      setMicPermissionDenied(false);
 
       // JS watchdog: guarantees the mic is released even if no native event fires.
       clearWatchdog();
@@ -304,6 +336,14 @@ export function useSpeechRecognition(): SpeechRecognitionState {
         // Native service from a prior session is still tearing down. Release it
         // fully so the next tap works; surface nothing — user simply taps again.
         await releaseNative();
+        return;
+      }
+      // Vosk rejects with 'Record permission not granted' when the mic permission
+      // is denied. Surface a dedicated flag so the UI can guide the user to
+      // Settings (MIUI won't re-prompt once permanently denied).
+      if (/permission/i.test(msg)) {
+        setMicPermissionDenied(true);
+        setError('Microphone access is needed to record expenses.');
         return;
       }
       setError(`Start failed: ${msg}`);
@@ -356,6 +396,34 @@ export function useSpeechRecognition(): SpeechRecognitionState {
     setError(null);
   }, []);
 
+  // Open the OS app-settings page so the user can flip the mic permission on.
+  const openAppSettings = useCallback(() => {
+    Linking.openSettings().catch(() => {});
+  }, []);
+
+  // ── Stop cleanly when the app leaves the foreground ──────────────────────────
+  // Holding a live SpeechService in the background is wasteful and, on some MIUI
+  // builds, the OS revokes the mic on background and the next start() then fails.
+  // Releasing here keeps state consistent: the user simply taps again on return.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') {
+        // Leaving the foreground mid-session: ABANDON it (don't commit). The
+        // captured fragment is unconfirmed and likely partial — auto-dispatching
+        // it on return could silently save a wrong expense. Better to drop it.
+        if (listeningRef.current || stoppingRef.current) {
+          abortSession();
+        }
+      } else {
+        // Back in the foreground: the user may have just granted the mic
+        // permission in Settings, so clear the stale "denied" affordance and let
+        // them try again. (A real denial re-trips on the next start attempt.)
+        setMicPermissionDenied(false);
+      }
+    });
+    return () => sub.remove();
+  }, [abortSession]);
+
   // ── Cleanup on unmount ─────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -374,9 +442,12 @@ export function useSpeechRecognition(): SpeechRecognitionState {
     resultId,
     emptyResultId,
     error,
+    modelLoadFailed,
+    micPermissionDenied,
     loadModel,
     startListening,
     stopListening,
     clearResults,
+    openAppSettings,
   };
 }

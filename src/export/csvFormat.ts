@@ -67,3 +67,21 @@ export function buildSummary(
 export function monthDirName(monthDate: Date): string {
   return format(monthDate, 'MM-MMMM');
 }
+
+// User-ready, TTS-friendly message for a storage-full export failure.
+export const STORAGE_FULL_MESSAGE = 'Storage full. Free some space and try again.';
+
+// True when an error message indicates the device is out of storage. Out-of-space
+// surfaces under several spellings across the FS/SAF layers (ENOSPC, "no space
+// left on device", "disk full", "not enough space") — match them all so the
+// export path can show the actionable message instead of a raw error. Also
+// recognizes STORAGE_FULL_MESSAGE itself, so a message that has ALREADY been
+// converted (re-thrown by exportMonth) is still classified as storage-full by
+// downstream callers and spoken as-is rather than double-wrapped.
+export function isStorageFullError(message: string): boolean {
+  return (
+    /enospc|no space|disk full|no space left|not enough space|insufficient storage|storage full/i.test(
+      message
+    )
+  );
+}
