@@ -17,6 +17,13 @@ import { useTts } from '../src/voice/useTts';
 import { useVoiceCommand, type CommandOutcome } from '../src/voice/useVoiceCommand';
 import { useAppStore } from '../src/store/useAppStore';
 import { formatCurrency, formatMonthLabel, todayIso } from '../src/utils/formatters';
+import {
+  exportCurrentMonth,
+  shareFile,
+  autoExportPreviousMonth,
+  chooseExportFolder,
+  hasExportFolder,
+} from '../src/export/csvExporter';
 
 export default function HomeScreen() {
   const stt = useSpeechRecognition();
@@ -32,6 +39,12 @@ export default function HomeScreen() {
 
   const [outcome, setOutcome] = useState<CommandOutcome | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  // Whether the user has picked a file-manager-browsable export folder.
+  const [folderChosen, setFolderChosen] = useState(false);
+  // One-shot banner shown when the previous month was auto-exported on launch.
+  const [autoExportBanner, setAutoExportBanner] = useState<string | null>(null);
+  const autoExportRanRef = useRef(false);
 
   // Editor modal state.
   const [editorVisible, setEditorVisible] = useState(false);
@@ -76,6 +89,24 @@ export default function HomeScreen() {
   useEffect(() => {
     if (isDbReady) refreshAll();
   }, [isDbReady, refreshAll]);
+
+  // Reflect whether an export folder is already configured (for the button label).
+  useEffect(() => {
+    if (isDbReady) hasExportFolder().then(setFolderChosen);
+  }, [isDbReady]);
+
+  // Auto-export the previous month on first launch (once the DB is ready), if it
+  // has expenses and hasn't been exported yet. Show a brief dismissable banner.
+  useEffect(() => {
+    if (!isDbReady || autoExportRanRef.current) return;
+    autoExportRanRef.current = true;
+    autoExportPreviousMonth().then((result) => {
+      if (result && result.count > 0) {
+        const month = result.monthLabel.split(' ')[0]; // "June 2026" → "June"
+        setAutoExportBanner(`${month} expenses auto-exported.`);
+      }
+    });
+  }, [isDbReady]);
 
   // New recognized result → dispatch (direct or via confirm popup).
   useEffect(() => {
@@ -129,6 +160,58 @@ export default function HomeScreen() {
 
   const onEditorCancel = useCallback(() => setEditorVisible(false), []);
 
+  // Header export button: write this month's CSV + summary, then open the share
+  // sheet. Mirrors the "export this month" voice command. Disabled while busy.
+  const onExportPress = useCallback(async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const result = await exportCurrentMonth();
+      const savedTo = result.externalCsvUri ? ' Also saved to your chosen folder.' : '';
+      const msg =
+        result.count === 0
+          ? `No expenses for ${result.monthLabel} yet — saved an empty report.${savedTo}`
+          : `Exported ${result.count} ${result.count === 1 ? 'expense' : 'expenses'} for ${result.monthLabel}.${savedTo}`;
+      setOutcome({ kind: 'export', message: msg });
+      // Best-effort share — a failed/cancelled share sheet must not look like a
+      // failed export, since the file is already saved.
+      try {
+        await shareFile(result.csvUri);
+      } catch (shareErr) {
+        console.warn('[Home] share sheet failed:', shareErr);
+      }
+    } catch (e) {
+      console.warn('[Home] export failed:', e);
+      setOutcome({
+        kind: 'error',
+        message: e instanceof Error ? e.message : 'Could not export. Please try again.',
+      });
+    } finally {
+      setExporting(false);
+    }
+  }, [exporting]);
+
+  // Let the user pick a file-manager-browsable folder where exports are also
+  // saved. One-time; the grant is persisted. Cancelling is a no-op.
+  const onChooseFolder = useCallback(async () => {
+    try {
+      const granted = await chooseExportFolder();
+      if (granted) {
+        setFolderChosen(true);
+        setOutcome({
+          kind: 'export',
+          message: 'Export folder set. Future exports will also be saved there.',
+        });
+      }
+    } catch (e) {
+      console.warn('[Home] choose folder failed:', e);
+      setOutcome({
+        kind: 'error',
+        message: 'Could not set the export folder. Files are still saved in the app and shareable.',
+      });
+    }
+  }, []);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await refreshAll();
@@ -147,10 +230,50 @@ export default function HomeScreen() {
           <View>
             {/* ── Monthly summary card ──────────────────────────────────── */}
             <View style={styles.summaryCard}>
+              <TouchableOpacity
+                style={styles.exportBtn}
+                onPress={onExportPress}
+                disabled={exporting}
+                activeOpacity={0.7}
+                accessibilityLabel="Export this month to CSV"
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
+                <Text style={[styles.exportIcon, exporting && styles.exportIconBusy]}>
+                  {exporting ? '…' : '⤴'}
+                </Text>
+              </TouchableOpacity>
               <Text style={styles.summaryMonth}>{formatMonthLabel(todayIso())}</Text>
               <Text style={styles.summaryAmount}>{formatCurrency(monthlyTotal)}</Text>
               <Text style={styles.summaryLabel}>spent this month</Text>
             </View>
+
+            {/* ── Auto-export banner (one-shot, tap to dismiss) ─────────── */}
+            {autoExportBanner ? (
+              <TouchableOpacity
+                style={styles.banner}
+                onPress={() => setAutoExportBanner(null)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.bannerText}>✓ {autoExportBanner}</Text>
+                <Text style={styles.bannerDismiss}>Tap to dismiss</Text>
+              </TouchableOpacity>
+            ) : null}
+
+            {/* ── Export folder chooser ─────────────────────────────────── */}
+            <TouchableOpacity
+              style={styles.folderRow}
+              onPress={onChooseFolder}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.folderText}>
+                {folderChosen ? '✓ Export folder set' : '📁 Choose export folder (optional)'}
+              </Text>
+              <Text style={styles.folderHint}>
+                {folderChosen
+                  ? 'Exports also save to your folder. Tap to change.'
+                  : 'Save CSVs to a folder any file manager can open.'}
+              </Text>
+            </TouchableOpacity>
 
             {/* ── Confirm-before-submit toggle ──────────────────────────── */}
             <View style={styles.toggleRow}>
@@ -296,6 +419,52 @@ const styles = StyleSheet.create({
   },
   summaryAmount: { color: C.white, fontSize: 34, fontWeight: '800', marginTop: 4 },
   summaryLabel: { color: C.dim, fontSize: 12, marginTop: 2 },
+
+  // Export / share icon, top-right of the summary card.
+  exportBtn: {
+    position: 'absolute',
+    top: 10,
+    right: 12,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  exportIcon: { color: C.accent, fontSize: 17, fontWeight: '700', lineHeight: 20 },
+  exportIconBusy: { color: C.dim },
+
+  // Auto-export banner
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#13301f',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#1f5235',
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+    marginBottom: 8,
+  },
+  bannerText: { color: C.green, fontSize: 13, fontWeight: '600' },
+  bannerDismiss: { color: C.dim, fontSize: 11 },
+
+  // Export folder chooser
+  folderRow: {
+    backgroundColor: C.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 6,
+  },
+  folderText: { color: C.white, fontSize: 14, fontWeight: '600' },
+  folderHint: { color: C.dim, fontSize: 11, marginTop: 2 },
 
   // Confirm toggle
   toggleRow: {

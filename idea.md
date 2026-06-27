@@ -973,3 +973,15 @@ Changes or deviations from the plan discovered during actual implementation.
 
 - **Tests:** orchestrator/screens are verified manually on-device (DB/TTS/Vosk side effects); parser logic is fully covered by the pure suite (126 tests).
 
+### Phase 5
+
+- **Storage: app-private canonical + SAF mirror.** Direct writes to `/sdcard/Documents/` fail on MIUI regardless of `WRITE_EXTERNAL_STORAGE` / `requestLegacyExternalStorage` — do not attempt. Final approach: write CSV + summary to app-private `documentDirectory/VoiceKhata/{year}/{MM-Month}/` (always writable, no permission), share from there. Optionally also mirror to a user-chosen folder via `StorageAccessFramework.requestDirectoryPermissionsAsync` (SAF grants ARE honoured by MIUI). The SAF tree URI is persisted in `settings` as `export_tree_uri`; mirror is best-effort and never throws.
+
+- **`expo-file-system/legacy` required:** the new class API doesn't expose `StorageAccessFramework`; use `expo-file-system/legacy` for `documentDirectory`, `writeAsStringAsync`, `makeDirectoryAsync`, `getInfoAsync`, and `StorageAccessFramework`.
+
+- **Pure builders in `csvFormat.ts`:** `buildCsv`/`buildSummary`/`escapeCsvField`/`monthDirName` live in `src/export/csvFormat.ts` (no native imports → unit-testable, 16 tests). `csvExporter.ts` re-exports them. Jest `testMatch` widened to include `**/src/export/**/*.test.ts`.
+
+- **EXPORT case returns early** in the orchestrator to control speak-then-share ordering (bypasses the shared `tts.speak` at the bottom of `handleCommand`). Share-sheet failure is swallowed — it must not undo a successful write.
+
+- **Tests:** 142 total (126 parser + 16 `csvFormat`), all green. File I/O / SAF / sharing / auto-export remain manual on-device (native side effects).
+

@@ -1,3 +1,4 @@
+import { format } from 'date-fns';
 import { parseIntent } from './intentParser';
 import type { Category } from './categoryMatcher';
 
@@ -35,7 +36,10 @@ function parse(text: string) {
   return parseIntent(text, SEED_CATEGORIES);
 }
 
-const todayStr = () => new Date().toISOString().split('T')[0];
+// Match the resolver's local-time formatting (date-fns format, NOT UTC
+// toISOString) so "today" agrees with what dateResolver produces near midnight
+// and month boundaries.
+const todayStr = () => format(new Date(), 'yyyy-MM-dd');
 
 // ── reported real-world failures (regression guard) ─────────────────────────────
 // Each of these produced wrong output on-device before the period/stop-word fixes.
@@ -539,7 +543,7 @@ describe('spoken number words → digit amounts', () => {
   });
 
   test('spoken number with date: "gym five hundred paid yesterday"', () => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayStr();
     const r = parse('gym five hundred paid yesterday');
     expect(r.action).toBe('ADD');
     expect(r.amount).toBe(500);
@@ -563,13 +567,13 @@ describe('date integration in ADD intents', () => {
   });
 
   test('"gym 500 paid yesterday" has a date different from today', () => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayStr();
     const r = parse('gym 500 paid yesterday');
     expect(r.date).not.toBe(today);
   });
 
   test('"gym 500 paid last monday" has a date different from today', () => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayStr();
     const r = parse('gym 500 paid last monday');
     expect(r.date).not.toBe(today);
   });

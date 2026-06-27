@@ -7,6 +7,12 @@ import {
   getGrandTotal,
 } from '../db/expenseRepository';
 import { insertCategory, getCategoryByName } from '../db/categoryRepository';
+import {
+  exportCurrentMonth,
+  exportLastMonth,
+  shareFile,
+  type ExportResult,
+} from '../export/csvExporter';
 import { useAppStore } from '../store/useAppStore';
 import { CATEGORY_PARENTS } from '../utils/constants';
 import { formatExpenseDate } from '../utils/formatters';
@@ -190,14 +196,48 @@ export function useVoiceCommand(tts: TtsState): VoiceCommandApi {
           }
 
           // ── EXPORT ─────────────────────────────────────────────────────────
-          // CSV export lands in Phase 5. Until then, respond gracefully instead
-          // of failing silently so the command is acknowledged.
+          // Write CSV + summary files for the requested month, then open the
+          // system share sheet. The intent period is always this_month or
+          // last_month (set by the parser); anything else falls back to this.
           case 'EXPORT': {
-            outcome = {
-              kind: 'export',
-              message: 'Export is coming soon. It will be available in the next update.',
-            };
-            break;
+            const isLast = intent.period === 'last_month';
+            let result: ExportResult;
+            try {
+              result = isLast ? await exportLastMonth() : await exportCurrentMonth();
+            } catch (e) {
+              const m = e instanceof Error ? e.message : String(e);
+              console.warn('[useVoiceCommand] export failed:', m);
+              outcome = {
+                kind: 'error',
+                message: `Sorry, I could not export. ${e instanceof Error ? e.message : 'Please try again.'}`,
+              };
+              break;
+            }
+
+            const when = isLast ? 'last month' : 'this month';
+            outcome =
+              result.count === 0
+                ? {
+                    kind: 'export',
+                    message: `There are no expenses for ${when}. I saved an empty ${result.monthLabel} report.`,
+                  }
+                : {
+                    kind: 'export',
+                    message: `Exported ${result.count} ${
+                      result.count === 1 ? 'expense' : 'expenses'
+                    } for ${result.monthLabel}. Opening the share sheet.`,
+                  };
+
+            // Speak the confirmation, then open the share sheet. Sharing is
+            // best-effort — a failure to open the sheet shouldn't undo the
+            // successful export, so swallow its error after logging.
+            tts.speak(outcome.message);
+            try {
+              await shareFile(result.csvUri);
+            } catch (e) {
+              console.warn('[useVoiceCommand] share sheet failed:', e);
+            }
+            return outcome;
           }
 
           // ── UNKNOWN ────────────────────────────────────────────────────────
